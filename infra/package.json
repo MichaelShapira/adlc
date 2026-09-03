@@ -1,0 +1,33 @@
+{
+  "name": "adlc-poc-infra",
+  "version": "0.1.0",
+  "private": true,
+  "bin": {
+    "adlc-poc": "bin/adlc-poc.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.152",
+    "@types/node": "22.15.3",
+    "aws-cdk": "2.1131.0",
+    "esbuild": "0.25.5",
+    "ts-node": "10.9.2",
+    "typescript": "5.8.3"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-agentcore": "3.895.0",
+    "@aws-sdk/client-bedrock-runtime": "3.895.0",
+    "@aws-sdk/client-codecommit": "3.895.0",
+    "@aws-sdk/client-dynamodb": "3.895.0",
+    "@aws-sdk/client-s3": "3.895.0",
+    "@aws-sdk/client-sfn": "3.895.0",
+    "@aws-sdk/lib-dynamodb": "3.895.0",
+    "@aws-sdk/s3-request-presigner": "3.895.0",
+    "aws-cdk-lib": "2.220.0",
+    "constructs": "10.4.2"
+  }
+}
