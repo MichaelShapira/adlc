@@ -334,4 +334,8 @@ select {
 .guide-content code { background:#f1f5f9; padding:1px 5px; border-radius:5px; font-size:12px; }
 @media(max-width:800px){ .guide-body{grid-template-columns:1fr} .guide-toc{display:none} }
 .guide-code { background:#0f172a; color:#e2e8f0; padding:12px 14px; border-radius:8px; font-size:12px; line-height:1.5; overflow:auto; margin:8px 0; }
+.guide-table { width:100%; border-collapse:collapse; margin:12px 0; font-size:13px; }
+.guide-table th, .guide-table td { padding:8px 12px; border:1px solid #334155; text-align:left; }
+.guide-table th { background:#1e293b; color:#94a3b8; font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:0.5px; }
+.guide-table td { color:#e2e8f0; }
 .guide-content a { color:#4f46e5; }

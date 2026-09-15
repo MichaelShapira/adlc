@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "./api";
-import type { ExecutionMode, Report, Run, RunEvent, RunLog, UsageStatus } from "./types";
+import type { ExecutionMode, Report, Run, RunEvent, RunLog, SecurityReview, UsageStatus } from "./types";
 import {
   displayStatus,
   optionalString,
@@ -177,6 +177,126 @@ function formatUsageUsd(value: unknown, statusValue: unknown) {
   return formatted === "Unavailable" ? formatted : `$${formatted}`;
 }
 
+const RISK_COLORS: Record<string, string> = {
+  CRITICAL: "#ff4444",
+  HIGH: "#ff8800",
+  MEDIUM: "#ffcc00",
+  LOW: "#4488ff",
+  INFORMATIONAL: "#888",
+  UNKNOWN: "#888",
+};
+
+function SecurityReviewCard({ securityReview }: { securityReview?: SecurityReview }) {
+  if (!securityReview) return null;
+
+  // Show in-progress state
+  if (!securityReview.reviewed) {
+    return (
+      <section className="card" style={{ borderLeft: "3px solid #3b82f6" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <span style={{ fontSize: "1.4rem" }}>🔒</span>
+          <h3 style={{ margin: 0 }}>Security Review</h3>
+          <span style={{
+            marginLeft: "auto", padding: "0.2rem 0.6rem", borderRadius: "4px",
+            fontSize: "0.8rem", fontWeight: 600, color: "#fff", backgroundColor: "#3b82f6",
+          }}>IN PROGRESS</span>
+        </div>
+        <p style={{ color: "#aaa", fontSize: "0.85rem", margin: "0.5rem 0 0" }}>
+          AWS Security Agent is scanning... ({securityReview.phase === "CODE_REVIEW" ? "Code Review" : "Penetration Test"})
+        </p>
+      </section>
+    );
+  }
+
+  const { passed, findingsCount, criticalCount, highCount, mediumCount, lowCount, findings } = securityReview;
+
+  return (
+    <section className="card" style={{ borderLeft: passed ? "3px solid #22c55e" : "3px solid #ff4444" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.75rem" }}>
+        <span style={{ fontSize: "1.4rem" }}>{passed ? "🛡️" : "⚠️"}</span>
+        <h3 style={{ margin: 0 }}>Security Review</h3>
+        <span
+          style={{
+            marginLeft: "auto",
+            padding: "0.2rem 0.6rem",
+            borderRadius: "4px",
+            fontSize: "0.8rem",
+            fontWeight: 600,
+            color: "#fff",
+            backgroundColor: passed ? "#22c55e" : "#ff4444",
+          }}
+        >
+          {passed ? "PASSED" : "FAILED"}
+        </span>
+      </div>
+
+      <p style={{ color: "#aaa", fontSize: "0.85rem", margin: "0 0 0.75rem" }}>
+        AWS Security Agent — Code Review{securityReview.codeReviewId ? " ✅" : ""} + Penetration Test{securityReview.pentestId ? " ✅" : ""}
+      </p>
+
+      {/* Severity badges */}
+      <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+        {(["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const).map((level) => {
+          const count = level === "CRITICAL" ? criticalCount : level === "HIGH" ? highCount : level === "MEDIUM" ? mediumCount : lowCount;
+          return (
+            <div
+              key={level}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.3rem",
+                padding: "0.25rem 0.5rem",
+                borderRadius: "4px",
+                backgroundColor: count > 0 ? RISK_COLORS[level] + "22" : "#333",
+                border: `1px solid ${count > 0 ? RISK_COLORS[level] : "#555"}`,
+                fontSize: "0.8rem",
+              }}
+            >
+              <strong style={{ color: count > 0 ? RISK_COLORS[level] : "#888" }}>{count}</strong>
+              <span style={{ color: "#ccc" }}>{level}</span>
+            </div>
+          );
+        })}
+        <div style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem", color: "#aaa" }}>
+          {findingsCount} total finding{findingsCount !== 1 ? "s" : ""}
+        </div>
+      </div>
+
+      {/* Findings list */}
+      {findings && findings.length > 0 ? (
+        <div style={{ maxHeight: "300px", overflowY: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #444", textAlign: "left" }}>
+                <th style={{ padding: "0.4rem", color: "#aaa" }}>Finding</th>
+                <th style={{ padding: "0.4rem", color: "#aaa" }}>Risk</th>
+                <th style={{ padding: "0.4rem", color: "#aaa" }}>Confidence</th>
+                <th style={{ padding: "0.4rem", color: "#aaa" }}>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {findings.map((f, i) => (
+                <tr key={f.findingId || i} style={{ borderBottom: "1px solid #333" }}>
+                  <td style={{ padding: "0.4rem" }}>{f.name}</td>
+                  <td style={{ padding: "0.4rem" }}>
+                    <span style={{ color: RISK_COLORS[f.riskLevel] || "#888", fontWeight: 600 }}>
+                      {f.riskLevel}
+                    </span>
+                  </td>
+                  <td style={{ padding: "0.4rem", color: "#ccc" }}>{f.confidence}</td>
+                  <td style={{ padding: "0.4rem", color: "#ccc" }}>{f.status}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p style={{ color: "#22c55e", fontWeight: 500 }}>✅ No security issues found</p>
+      )}
+    </section>
+  );
+}
+
 function ReportCard({ run }: { run: Run }) {
   const reportRecord = safeRecord(run.report);
   if (!reportRecord) return null;
@@ -188,9 +308,11 @@ function ReportCard({ run }: { run: Run }) {
   const analysis = safeRecord(usage?.analysis);
   const kiro = safeRecord(usage?.kiro);
   const agentCore = safeRecord(usage?.agentCore);
+  const security = safeRecord(usage?.security);
   const analysisStatus = safeUsageStatus(analysis?.status);
   const kiroStatus = safeUsageStatus(kiro?.status);
   const agentCoreStatus = safeUsageStatus(agentCore?.status);
+  const securityStatus = safeUsageStatus(security?.status);
   const sessions = safeObjectArray<Record<string, unknown>>(agentCore?.sessions);
   const failure = safeRecord(r.failure);
   return (
@@ -320,6 +442,27 @@ function ReportCard({ run }: { run: Run }) {
               Source: {safeString(agentCore?.source, "cgroup-v2 usage log")}. Session-correlated runtime data; not account-wide metrics.
             </p>
           </article>
+
+          {securityStatus !== "NOT_APPLICABLE" && (
+            <article className="usage-card security-usage">
+              <div className="usage-card-heading">
+                <div>
+                  <span className="usage-icon">🔒</span>
+                  <strong>Security review</strong>
+                </div>
+                <UsageStatusPill status={securityStatus} />
+              </div>
+              <dl className="usage-metrics">
+                <div className="usage-wide"><dt>Mode</dt><dd>{safeString(security?.mode, "skip")}</dd></div>
+                <div><dt>Task hours</dt><dd>{formatUsageNumber(security?.taskHours, securityStatus, 2)}</dd></div>
+                <div><dt>Rate</dt><dd>$50/hr</dd></div>
+                <div className="usage-wide"><dt>Cost</dt><dd>{formatUsageUsd(security?.costUsd, securityStatus)}</dd></div>
+              </dl>
+              <p className="usage-note">
+                AWS Security Agent pentest — billed at $50 per task-hour. Code review is free.
+              </p>
+            </article>
+          )}
         </div>
       </section>
 
@@ -404,6 +547,9 @@ export function RunDetail({
 
       <ReportCard run={run} />
 
+      {/* Security Review Section */}
+      <SecurityReviewCard securityReview={run.securityReview as SecurityReview | undefined} />
+
       {(implementation || validation || optionalString(run.fixBranch)) && (
         <section className="card verification-card" aria-labelledby="verification-title">
           <div className="verification-heading">
@@ -449,7 +595,8 @@ export function RunDetail({
             <li><span>2</span><div><strong>Hard build gate</strong><small>A failed project build cannot be reported as a validated fix.</small></div></li>
             <li><span>3</span><div><strong>Independent validator</strong><small>Validation reviews the repository result against the frozen artifact.</small></div></li>
             <li><span>4</span><div><strong>Three-attempt loop</strong><small>Validation findings can drive bounded retries without changing the approval.</small></div></li>
-            <li><span>5</span><div><strong>Immutable diff + human inspection</strong><small>The fix branch preserves the source diff and evidence for direct review.</small></div></li>
+            <li><span>5</span><div><strong>Security Agent review</strong><small>AWS Security Agent runs automated penetration testing and code security analysis.</small></div></li>
+            <li><span>6</span><div><strong>Immutable diff + human inspection</strong><small>The fix branch preserves the source diff and evidence for direct review.</small></div></li>
           </ol>
         </section>
       )}

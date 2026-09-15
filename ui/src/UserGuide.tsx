@@ -5,14 +5,15 @@ const SECTIONS = [
   { id: "start-run", label: "2. Starting a bug-fix run" },
   { id: "pipeline", label: "3. The pipeline, stage by stage" },
   { id: "approval", label: "4. The human approval gate" },
-  { id: "report", label: "5. Reading the report" },
-  { id: "usage", label: "6. Usage & cost breakdown" },
-  { id: "repository", label: "7. Repository explorer & fix review" },
-  { id: "context", label: "8. Context library" },
-  { id: "mcp", label: "9. MCP servers" },
-  { id: "logs", label: "10. Agent logs" },
-  { id: "troubleshooting", label: "11. Troubleshooting & FAQ" },
-  { id: "kiro-setup", label: "12. Admin: connecting Kiro CLI" },
+  { id: "security", label: "5. Security review (AWS Security Agent)" },
+  { id: "report", label: "6. Reading the report" },
+  { id: "usage", label: "7. Usage & cost breakdown" },
+  { id: "repository", label: "8. Repository explorer & fix review" },
+  { id: "context", label: "9. Context library" },
+  { id: "mcp", label: "10. MCP servers" },
+  { id: "logs", label: "11. Agent logs" },
+  { id: "troubleshooting", label: "12. Troubleshooting & FAQ" },
+  { id: "kiro-setup", label: "13. Admin: connecting Kiro CLI" },
 ];
 
 export function UserGuide({ onClose }: { onClose: () => void }) {
@@ -203,8 +204,72 @@ export function UserGuide({ onClose }: { onClose: () => void }) {
               </p>
             </section>
 
+            <section id="guide-security">
+              <h3>5. Security review (AWS Security Agent)</h3>
+              <p>
+                After validation passes, the pipeline can optionally run an <strong>AWS
+                Security Agent</strong> review against the fix branch. The Security Agent
+                performs both a <strong>code review</strong> (static analysis) and a
+                <strong>penetration test</strong> (dynamic DAST scanning) in parallel,
+                then reports findings with severity levels.
+              </p>
+              <p>The <strong>Security review</strong> dropdown on the start-run form offers three modes:</p>
+              <dl>
+                <dt>Skip</dt>
+                <dd>
+                  No security review is performed. The pipeline goes straight from
+                  validation to the final report. Use this for quick iterations where
+                  you only care about functional correctness.
+                </dd>
+                <dt>Scan only (async)</dt>
+                <dd>
+                  The pipeline kicks off both the code review and the penetration
+                  test, then <strong>does not wait</strong> for them to finish. The run
+                  completes immediately with its normal report. The security review
+                  continues in the background on the AWS Security Agent side — you can
+                  check results later in the Security Agent console or on the next
+                  poll. This is the default and recommended mode for demos: it shows
+                  the integration without adding 20–40 minutes to the run.
+                </dd>
+                <dt>Scan & remediate</dt>
+                <dd>
+                  The pipeline starts both reviews and <strong>polls until both
+                  complete</strong> (up to 60 minutes). Once finished, findings are
+                  collected and shown in the run's security review card. In a future
+                  iteration, critical/high findings would be fed back to the coding
+                  agent for remediation — today it reports them for human review.
+                </dd>
+              </dl>
+              <h4>What runs under the hood</h4>
+              <ul>
+                <li>
+                  <strong>Code review</strong> — static analysis of the source code.
+                  Typically completes in 15–30 minutes with ~15 tasks. Each task
+                  examines a different aspect of the codebase (architecture, data flow,
+                  interfaces, etc.). <strong>Code review is free — no per-hour charge.</strong>
+                </li>
+                <li>
+                  <strong>Penetration test</strong> — dynamic testing that deploys the
+                  application, crawls it, then runs targeted attack tasks (XSS, SQL
+                  injection, SSRF, path traversal, privilege escalation, etc.).
+                  Typically completes in 20–40 minutes with 30–50 tasks.
+                  <strong> Pentest is billed at $50 per task-hour.</strong> Each task runs
+                  independently (often under 15 minutes each), but there can be many
+                  tasks in parallel. A typical pentest run accumulates 5–8 total
+                  task-hours, costing <strong>$250–$400 per run</strong>.
+                </li>
+              </ul>
+              <h4>Security review card</h4>
+              <p>
+                When a security review completes (in "Scan & remediate" mode), the
+                run page shows a security card with finding counts by severity
+                (Critical, High, Medium, Low) and a pass/fail verdict. The run passes
+                security review only if there are zero Critical and zero High findings.
+              </p>
+            </section>
+
             <section id="guide-report">
-              <h3>5. Reading the report</h3>
+              <h3>6. Reading the report</h3>
               <ul>
                 <li>
                   <strong>Headline & phases</strong> — overall outcome, which phases
@@ -230,11 +295,14 @@ export function UserGuide({ onClose }: { onClose: () => void }) {
             </section>
 
             <section id="guide-usage">
-              <h3>6. Usage & cost breakdown</h3>
+              <h3>7. Usage & cost breakdown</h3>
+              <p>Every completed run includes a detailed cost breakdown. The total
+                cost shown at the top is the sum of all measured components:</p>
               <ul>
                 <li>
                   <strong>Analysis</strong> — input/output tokens and cost for the
                   TRIAGE and DRAFT calls made with your selected analysis model.
+                  Cost depends on the model: Haiku is cheapest, Opus most expensive.
                 </li>
                 <li>
                   <strong>Kiro</strong> — credits consumed by Kiro CLI per
@@ -249,11 +317,36 @@ export function UserGuide({ onClose }: { onClose: () => void }) {
                   plus session IDs and trace IDs for cross-referencing with AWS
                   telemetry.
                 </li>
+                <li>
+                  <strong>Security review</strong> — shown only when security review
+                  was not skipped. Displays the total pentest task-hours and cost
+                  at <strong>$50 per task-hour</strong>. Code review is free and does
+                  not appear in the cost breakdown. The task hours are fetched from
+                  the AWS Security Agent API after the pentest completes.
+                </li>
               </ul>
+              <h4>Typical cost per run</h4>
+              <table className="guide-table">
+                <thead>
+                  <tr><th>Component</th><th>Typical range</th><th>Notes</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td>Analysis (Haiku)</td><td>$0.01 – $0.05</td><td>Triage + draft calls</td></tr>
+                  <tr><td>Analysis (Sonnet)</td><td>$0.05 – $0.30</td><td>Triage + draft calls</td></tr>
+                  <tr><td>Kiro CLI</td><td>$0.50 – $3.00</td><td>Per attempt, depends on complexity</td></tr>
+                  <tr><td>AgentCore runtime</td><td>Included</td><td>Container compute (preview pricing)</td></tr>
+                  <tr><td>Code review</td><td>Free</td><td>Static analysis, 15–30 min</td></tr>
+                  <tr><td>Pentest</td><td>$250 – $400</td><td>$50/task-hour × 5–8 hours typical</td></tr>
+                </tbody>
+              </table>
+              <p className="muted">
+                Without security review, a typical bug-fix run costs under $5.
+                With pentest enabled, the security review dominates the cost.
+              </p>
             </section>
 
             <section id="guide-repository">
-              <h3>7. Repository explorer & fix review</h3>
+              <h3>8. Repository explorer & fix review</h3>
               <ul>
                 <li>
                   <strong>Browse code</strong> — read-only explorer over the demo
@@ -287,7 +380,7 @@ export function UserGuide({ onClose }: { onClose: () => void }) {
             </section>
 
             <section id="guide-context">
-              <h3>8. Context library</h3>
+              <h3>9. Context library</h3>
               <p>
                 The <strong>Context</strong> tab is your private library of material the
                 analysis model may use during triage: typed text notes, PDFs (such as a
@@ -304,7 +397,7 @@ export function UserGuide({ onClose }: { onClose: () => void }) {
             </section>
 
             <section id="guide-mcp">
-              <h3>9. MCP servers</h3>
+              <h3>10. MCP servers</h3>
               <p>
                 The <strong>MCP</strong> tab lets you give the coding agent extra
                 abilities through Model Context Protocol servers. Paste or edit an
@@ -322,7 +415,7 @@ export function UserGuide({ onClose }: { onClose: () => void }) {
             </section>
 
             <section id="guide-logs">
-              <h3>10. Agent logs</h3>
+              <h3>11. Agent logs</h3>
               <p>
                 The bottom of every run page streams the audit log (refreshed every 3
                 seconds). Each line has a timestamp, level (INFO/WARN/ERROR), and a
@@ -335,7 +428,7 @@ export function UserGuide({ onClose }: { onClose: () => void }) {
             </section>
 
             <section id="guide-troubleshooting">
-              <h3>11. Troubleshooting & FAQ</h3>
+              <h3>12. Troubleshooting & FAQ</h3>
               <dl>
                 <dt>Kiro cost shows "Unavailable"</dt>
                 <dd>
@@ -374,7 +467,7 @@ export function UserGuide({ onClose }: { onClose: () => void }) {
             </section>
 
             <section id="guide-kiro-setup">
-              <h3>12. Administrator setup: connecting Kiro CLI</h3>
+              <h3>13. Administrator setup: connecting Kiro CLI</h3>
               <p>
                 All code changes are made by <strong>Kiro CLI</strong> running headlessly
                 inside the AgentCore container. It authenticates with a Kiro API key

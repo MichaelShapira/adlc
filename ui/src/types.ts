@@ -43,6 +43,7 @@ export interface StartRunRequest {
   triageInstruction: string;
   includeContext: boolean;
   autoExecuteSimple: boolean;
+  securityMode: "skip" | "scan" | "remediate";
 }
 
 export interface Draft {
@@ -112,6 +113,12 @@ export interface UsageBreakdown {
       status: UsageStatus;
     }>;
   };
+  security?: {
+    status: UsageStatus;
+    taskHours: number | null;
+    costUsd: number | null;
+    mode: string;
+  };
 }
 
 export interface Report {
@@ -145,6 +152,7 @@ export interface Run {
   triageInstruction?: string;
   includeContext?: boolean;
   autoExecuteSimple?: boolean;
+  securityMode?: string;
   workflowVersion?: number;
   contextAudit?: {
     enabled: boolean;
@@ -196,6 +204,32 @@ export interface Run {
     error?: string;
   };
   fixBranch?: string;
+  securityReview?: SecurityReview;
+}
+
+export interface SecurityReview {
+  reviewed: boolean;
+  findingsCount: number;
+  criticalCount: number;
+  highCount: number;
+  mediumCount: number;
+  lowCount: number;
+  findings: Array<{
+    name: string;
+    riskLevel: string;
+    confidence: string;
+    status: string;
+    findingId: string;
+  }>;
+  codeReviewId?: string;
+  codeReviewJobId?: string;
+  pentestId?: string;
+  pentestJobId?: string;
+  passed: boolean;
+  phase?: string;
+  status?: string;
+  pentestTaskHours?: number;
+  pentestCostUsd?: number;
 }
 
 export interface AppConfig {

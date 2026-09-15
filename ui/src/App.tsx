@@ -77,6 +77,7 @@ function NewRunForm({ onStarted }: { onStarted: (runId: string) => void }) {
   const [triageInstruction, setTriageInstruction] = useState("");
   const [includeContext, setIncludeContext] = useState(false);
   const [autoExecuteSimple, setAutoExecuteSimple] = useState(false);
+  const [securityMode, setSecurityMode] = useState<"skip" | "scan" | "remediate">("scan");
   const [kiroConfigured, setKiroConfigured] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(true);
   const [modelError, setModelError] = useState("");
@@ -121,6 +122,7 @@ function NewRunForm({ onStarted }: { onStarted: (runId: string) => void }) {
         triageInstruction: triageInstruction.trim(),
         includeContext,
         autoExecuteSimple,
+        securityMode,
       }));
       const runId = optionalString(result?.runId);
       if (!runId) throw new Error("The run started without a usable run ID.");
@@ -200,6 +202,18 @@ function NewRunForm({ onStarted }: { onStarted: (runId: string) => void }) {
           onChange={(event) => setAutoExecuteSimple(event.target.checked)}
         />
         <span><strong>Auto-execute simple fixes</strong><small>Skip human approval only when triage returns SIMPLE. Complex fixes always pause for review.</small></span>
+      </label>
+      <label className="include-context-option">
+        <span><strong>Security review</strong><small>Run code review &amp; pentest via AWS Security Agent after validation.</small></span>
+        <select
+          value={securityMode}
+          onChange={(e) => setSecurityMode(e.target.value as "skip" | "scan" | "remediate")}
+          style={{ marginLeft: "auto" }}
+        >
+          <option value="skip">Skip</option>
+          <option value="scan">Scan only (async)</option>
+          <option value="remediate">Scan &amp; remediate</option>
+        </select>
       </label>
       <label className="field-label" htmlFor="kiro-model">
         Implementation model
@@ -450,7 +464,7 @@ function Dashboard({ signOut, user }: { signOut?: () => void; user?: { username?
             <p className="muted center">
               Select a run, or start a new one to watch the pipeline: configurable
               triage → Simple and Complex artifact generation → execution gate →
-              Kiro implementation → validation loop → report.
+              Kiro implementation → validation loop → security review → report.
             </p>
           )}
         </section>

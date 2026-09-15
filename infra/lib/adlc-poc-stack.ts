@@ -262,8 +262,27 @@ export class AdlcPocStack extends cdk.Stack {
       env: { VALIDATE_MODEL_ID },
     });
     const reportFn = stepFn("ReportFn", "report.ts");
+    const securityStartFn = stepFn("SecurityStartFn", "security-review-start.ts", {
+      timeout: cdk.Duration.minutes(5),
+      memory: 1024,
+    });
+    const securityCheckFn = stepFn("SecurityCheckFn", "security-review-check.ts", {
+      timeout: cdk.Duration.minutes(2),
+    });
+    for (const fn of [securityStartFn, securityCheckFn]) {
+      fn.addEnvironment("AGENT_SPACE_ID", "as-6b6ad79c-b406-4765-aa20-7e8a904e6f9e");
+      fn.addToRolePolicy(new iam.PolicyStatement({
+        actions: ["securityagent:*"],
+        resources: ["*"],
+      }));
+    }
+    securityStartFn.addEnvironment("SERVICE_ROLE_ARN", "arn:aws:iam::703091483751:role/service-role/security-testing-20260914113135");
+    securityStartFn.addEnvironment("CONTEXT_BUCKET", contextBucket.bucketName);
+    contextBucket.grantReadWrite(securityStartFn);
+    repo.grantRead(securityStartFn);
+    // APP_ENDPOINT set after CloudFront distribution is created (see below)
 
-    for (const fn of [triageFn, draftFn, autoDecisionFn, awaitApprovalFn, implementFn, validateFn, reportFn]) {
+    for (const fn of [triageFn, draftFn, autoDecisionFn, awaitApprovalFn, implementFn, validateFn, reportFn, securityStartFn, securityCheckFn]) {
       runsTable.grantReadWriteData(fn);
     }
     const bedrockInvoke = new iam.PolicyStatement({
@@ -292,6 +311,7 @@ export class AdlcPocStack extends cdk.Stack {
     repo.grantRead(draftFn);
     repo.grantRead(validateFn);
     repo.grantRead(implementFn);
+    repo.grantRead(securityStartFn);
     repoControlTable.grantReadWriteData(implementFn);
     implementFn.addToRolePolicy(
       new iam.PolicyStatement({
@@ -461,8 +481,98 @@ export class AdlcPocStack extends cdk.Stack {
       )
       .otherwise(awaitApproval);
 
+    const securityStart = new tasks.LambdaInvoke(this, "SecurityStart", {
+      lambdaFunction: securityStartFn,
+      payload: sfn.TaskInput.fromObject({
+        "runId.$": "$.runId",
+        "implementResult.$": "$.implementResult",
+      }),
+      payloadResponseOnly: true,
+      resultPath: "$.securityStart",
+    });
+    securityStart.addRetry({
+      errors: [
+        "Lambda.ServiceException",
+        "Lambda.AWSLambdaException",
+        "Lambda.SdkClientException",
+        "Lambda.TooManyRequestsException",
+      ],
+      interval: cdk.Duration.seconds(2),
+      backoffRate: 2,
+      maxAttempts: 3,
+    });
+
+    const securityWait = new sfn.Wait(this, "SecurityWait", {
+      time: sfn.WaitTime.duration(cdk.Duration.seconds(30)),
+    });
+
+    const securityCheck = new tasks.LambdaInvoke(this, "SecurityCheck", {
+      lambdaFunction: securityCheckFn,
+      payload: sfn.TaskInput.fromObject({
+        "runId.$": "$.runId",
+        "securityStart.$": "$.securityStart",
+      }),
+      payloadResponseOnly: true,
+      resultPath: "$.securityStart",
+    });
+    securityCheck.addRetry({
+      errors: [
+        "Lambda.ServiceException",
+        "Lambda.AWSLambdaException",
+        "Lambda.SdkClientException",
+        "Lambda.TooManyRequestsException",
+      ],
+      interval: cdk.Duration.seconds(2),
+      backoffRate: 2,
+      maxAttempts: 3,
+    });
+
+    const securityDone = new sfn.Choice(this, "SecurityDone?")
+      .when(sfn.Condition.booleanEquals("$.securityStart.complete", true), reportSuccess)
+      .otherwise(securityWait);
+
+    // Async path: start security review but skip to report immediately
+    const securityStartAsync = new tasks.LambdaInvoke(this, "SecurityStartAsync", {
+      lambdaFunction: securityStartFn,
+      payload: sfn.TaskInput.fromObject({
+        "runId.$": "$.runId",
+        "implementResult.$": "$.implementResult",
+      }),
+      payloadResponseOnly: true,
+      resultPath: "$.securityStart",
+    });
+    securityStartAsync.addRetry({
+      errors: [
+        "Lambda.ServiceException",
+        "Lambda.AWSLambdaException",
+        "Lambda.SdkClientException",
+        "Lambda.TooManyRequestsException",
+      ],
+      interval: cdk.Duration.seconds(2),
+      backoffRate: 2,
+      maxAttempts: 3,
+    });
+    securityStartAsync.next(reportSuccess);
+
+    // Route based on securityMode: skip | scan (async) | remediate (wait+loop)
+    const securityModeChoice = new sfn.Choice(this, "SecurityRemediationEnabled?")
+      .when(
+        sfn.Condition.stringEquals("$.securityMode", "remediate"),
+        securityStart
+      )
+      .when(
+        sfn.Condition.stringEquals("$.securityMode", "scan"),
+        securityStartAsync
+      )
+      .otherwise(reportSuccess); // skip
+
+    // Wire: start → wait → check → done? → (loop or report)
+    securityStart.next(securityWait);
+    securityWait.next(securityCheck);
+    securityCheck.next(securityDone);
+
     const validationChoice = new sfn.Choice(this, "ValidationGreen?")
-      .when(sfn.Condition.booleanEquals("$.validation.pass", true), reportSuccess)
+      .when(sfn.Condition.booleanEquals("$.validation.pass", true), securityModeChoice)
       .when(
         sfn.Condition.and(
           sfn.Condition.booleanEquals("$.validation.pass", false),
@@ -487,6 +597,8 @@ export class AdlcPocStack extends cdk.Stack {
       [awaitApproval, "APPROVAL"],
       [implement, "IMPLEMENT"],
       [validate, "VALIDATE"],
+      [securityStart, "SECURITY_START"],
+      [securityCheck, "SECURITY_CHECK"],
     ] as const) {
       const failureStage = new sfn.Pass(this, `${stage}FailureStage`, {
         result: sfn.Result.fromObject({ failureStage: stage }),
@@ -628,9 +740,24 @@ export class AdlcPocStack extends cdk.Stack {
       })
     );
     runsTable.grantReadData(repositoryReadFn);
-    runsTable.grantReadData(repositoryResetFn);
+    runsTable.grantReadWriteData(repositoryResetFn);
     repoControlTable.grantReadWriteData(repositoryResetFn);
     resetAuditTable.grantReadWriteData(repositoryResetFn);
+    repositoryResetFn.addEnvironment("STATE_MACHINE_ARN", stateMachine.stateMachineArn);
+    repositoryResetFn.addEnvironment("AGENT_SPACE_ID", "as-6b6ad79c-b406-4765-aa20-7e8a904e6f9e");
+    repositoryResetFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["states:ListExecutions", "states:StopExecution"],
+        resources: [stateMachine.stateMachineArn, `${stateMachine.stateMachineArn}:*`,
+          `arn:aws:states:${this.region}:${this.account}:execution:*`],
+      })
+    );
+    repositoryResetFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["securityagent:*"],
+        resources: ["*"],
+      })
+    );
     repositoryResetFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
@@ -864,6 +991,9 @@ export class AdlcPocStack extends cdk.Stack {
     // Outputs
     // ------------------------------------------------------------------
     new cdk.CfnOutput(this, "UiUrl", { value: `https://${distribution.domainName}` });
+
+    // Wire Security Review Lambda to the CloudFront endpoint
+    securityStartFn.addEnvironment("APP_ENDPOINT", `https://${distribution.domainName}`);
     new cdk.CfnOutput(this, "ApiUrl", { value: httpApi.apiEndpoint });
     new cdk.CfnOutput(this, "UserPoolId", { value: userPool.userPoolId });
     new cdk.CfnOutput(this, "UserPoolClientId", { value: userPoolClient.userPoolClientId });

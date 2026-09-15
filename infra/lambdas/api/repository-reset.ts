@@ -15,12 +15,129 @@ import type {
   APIGatewayProxyResultV2,
 } from "aws-lambda";
 import {
+  SFNClient,
+  ListExecutionsCommand,
+  StopExecutionCommand,
+} from "@aws-sdk/client-sfn";
+import {
   codeCommitClient,
   getRepoSnapshot,
   getRootCommit,
   resolveBranchCommit,
 } from "../shared/codecommit";
 import { callerIdentity, response } from "./http";
+import * as https from "node:https";
+import { SignatureV4 } from "@smithy/signature-v4";
+import { Sha256 } from "@aws-crypto/sha256-js";
+import { defaultProvider } from "@aws-sdk/credential-provider-node";
+
+const sfnClient = new SFNClient({});
+const STATE_MACHINE_ARN = process.env.STATE_MACHINE_ARN;
+const AGENT_SPACE_ID = process.env.AGENT_SPACE_ID;
+const REGION = process.env.AWS_REGION ?? "us-east-1";
+
+const signer = new SignatureV4({
+  credentials: defaultProvider(),
+  region: REGION,
+  service: "securityagent",
+  sha256: Sha256,
+});
+
+async function securityAgentApi(operation: string, body: Record<string, unknown>): Promise<unknown> {
+  const hostname = `securityagent.${REGION}.api.aws`;
+  const path = `/${operation}`;
+  const bodyStr = JSON.stringify(body);
+  const signed = await signer.sign({
+    method: "POST", protocol: "https:", hostname, path,
+    headers: { host: hostname, "content-type": "application/json" },
+    body: bodyStr,
+  });
+  return new Promise((resolve, reject) => {
+    const req = https.request({ hostname, path, method: "POST", headers: signed.headers }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (c: Buffer) => chunks.push(c));
+      res.on("end", () => {
+        const text = Buffer.concat(chunks).toString();
+        try { resolve(JSON.parse(text)); } catch { resolve(text); }
+      });
+    });
+    req.on("error", reject);
+    req.write(bodyStr);
+    req.end();
+  });
+}
+
+async function stopRunningExecutions(): Promise<number> {
+  if (!STATE_MACHINE_ARN) return 0;
+  let stopped = 0;
+  const resp = await sfnClient.send(new ListExecutionsCommand({
+    stateMachineArn: STATE_MACHINE_ARN,
+    statusFilter: "RUNNING",
+    maxResults: 20,
+  }));
+  for (const exec of resp.executions ?? []) {
+    try {
+      await sfnClient.send(new StopExecutionCommand({
+        executionArn: exec.executionArn,
+        cause: "Repository reset — cleaning up",
+      }));
+      stopped++;
+    } catch { /* ignore */ }
+  }
+  return stopped;
+}
+
+async function stopSecurityAgentJobs(): Promise<{ stoppedPentests: number; stoppedCodeReviews: number }> {
+  if (!AGENT_SPACE_ID) return { stoppedPentests: 0, stoppedCodeReviews: 0 };
+  let stoppedPentests = 0;
+  let stoppedCodeReviews = 0;
+
+  // Stop running pentests
+  try {
+    const pentests = (await securityAgentApi("ListPentests", { agentSpaceId: AGENT_SPACE_ID })) as {
+      pentestSummaries?: Array<{ pentestId: string }>;
+    };
+    for (const pt of pentests.pentestSummaries ?? []) {
+      const jobs = (await securityAgentApi("ListPentestJobsForPentest", {
+        pentestId: pt.pentestId, agentSpaceId: AGENT_SPACE_ID,
+      })) as { pentestJobSummaries?: Array<{ pentestJobId: string; status: string }> };
+      for (const j of jobs.pentestJobSummaries ?? []) {
+        if (j.status === "IN_PROGRESS") {
+          try {
+            await securityAgentApi("StopPentestJob", {
+              pentestId: pt.pentestId, pentestJobId: j.pentestJobId, agentSpaceId: AGENT_SPACE_ID,
+            });
+            stoppedPentests++;
+          } catch { /* ignore */ }
+        }
+      }
+    }
+  } catch (err) { console.warn("Failed to stop pentests:", err); }
+
+  // Stop running code reviews
+  try {
+    const reviews = (await securityAgentApi("ListCodeReviews", { agentSpaceId: AGENT_SPACE_ID })) as {
+      codeReviewSummaries?: Array<{ codeReviewId: string }>;
+    };
+    for (const cr of reviews.codeReviewSummaries ?? []) {
+      const jobs = (await securityAgentApi("ListCodeReviewJobsForCodeReview", {
+        codeReviewId: cr.codeReviewId, agentSpaceId: AGENT_SPACE_ID,
+      })) as { codeReviewJobSummaries?: Array<{ codeReviewJobId: string; status: string }> };
+      for (const j of jobs.codeReviewJobSummaries ?? []) {
+        if (j.status === "IN_PROGRESS") {
+          try {
+            await securityAgentApi("StopCodeReviewJob", {
+              codeReviewId: cr.codeReviewId, codeReviewJobId: j.codeReviewJobId, agentSpaceId: AGENT_SPACE_ID,
+            });
+            stoppedCodeReviews++;
+          } catch { /* ignore */ }
+        }
+      }
+    }
+  } catch (err) { console.warn("Failed to stop code reviews:", err); }
+
+  return { stoppedPentests, stoppedCodeReviews };
+}
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const REPO_NAME = process.env.REPO_NAME!;
@@ -147,7 +264,7 @@ async function getStatus(
     seedDigest: state.seedDigest,
     alreadyCanonical: state.alreadyCanonical,
     activeRuns,
-    canReset: resetAllowed && activeRuns.length === 0,
+    canReset: resetAllowed,
     resetAllowed,
     requiredConfirmation: `RESET ${BASE_BRANCH}`,
   });
@@ -178,9 +295,25 @@ async function resetRepository(
     return response(400, { error: "expectedHeadCommitId is required" });
   }
 
+  // Stop any running Step Function executions and Security Agent jobs
+  const [stoppedExecs, secAgentStopped] = await Promise.all([
+    stopRunningExecutions(),
+    stopSecurityAgentJobs(),
+  ]);
+  if (stoppedExecs > 0 || secAgentStopped.stoppedPentests > 0 || secAgentStopped.stoppedCodeReviews > 0) {
+    console.log(`Reset cleanup: ${stoppedExecs} executions, ${secAgentStopped.stoppedPentests} pentests, ${secAgentStopped.stoppedCodeReviews} code reviews stopped`);
+  }
+
+  // Mark any DB-active runs as ABORTED
   const activeRuns = await getActiveRuns();
-  if (activeRuns.length > 0) {
-    return response(409, { error: "repository reset is blocked by active runs", activeRuns });
+  for (const run of activeRuns) {
+    await ddb.send(new UpdateCommand({
+      TableName: RUNS_TABLE,
+      Key: { runId: run.runId },
+      UpdateExpression: "SET #s = :aborted, updatedAt = :now",
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: { ":aborted": "ABORTED", ":now": new Date().toISOString() },
+    }));
   }
 
   const actionId = randomUUID();

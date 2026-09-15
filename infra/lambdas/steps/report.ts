@@ -365,6 +365,15 @@ export const handler = async (event: {
     };
   });
 
+  // --- Security review cost ---
+  const securityEvents = events.filter((item) => item.phase === "SECURITY_REVIEW");
+  const securityCosts = securityEvents.map((item) => nonNegativeNumber(item.costUsd)).filter((v): v is number => v !== null);
+  const securityCostUsd = securityCosts.reduce((sum, v) => sum + v, 0);
+  const securityMode = stringValue(run.securityMode) ?? "skip";
+  const securityReview = run.securityReview as { pentestTaskHours?: number; pentestCostUsd?: number } | undefined;
+  const pentestTaskHours = nonNegativeNumber(securityReview?.pentestTaskHours);
+  const securityStatus: UsageStatus = securityMode === "skip" ? "NOT_APPLICABLE" : (securityCosts.length > 0 || pentestTaskHours !== null) ? "COMPLETE" : "UNAVAILABLE";
+
   const report = {
     headline: HEADLINE_BY_MODE[mode],
     totalTimeSeconds: totalSeconds,
@@ -421,6 +430,12 @@ export const handler = async (event: {
             : round(peakMemoryBytes / (1024 * 1024), 2),
         source: AGENTCORE_USAGE_SOURCE,
         sessions,
+      },
+      security: {
+        status: securityStatus,
+        taskHours: pentestTaskHours !== null ? round(pentestTaskHours, 2) : null,
+        costUsd: round(securityCostUsd),
+        mode: securityMode,
       },
     },
     ...(failure ? { failure } : {}),

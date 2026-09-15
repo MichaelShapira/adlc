@@ -59,6 +59,8 @@ interface StartRunBody {
   triageInstruction?: unknown;
   includeContext?: unknown;
   autoExecuteSimple?: unknown;
+  securityRemediation?: unknown;
+  securityMode?: unknown;
 }
 
 export const handler = async (
@@ -91,12 +93,21 @@ export const handler = async (
   const includeContext = body.includeContext === undefined ? false : body.includeContext;
   const autoExecuteSimple =
     body.autoExecuteSimple === undefined ? false : body.autoExecuteSimple;
+  const securityRemediation =
+    body.securityRemediation === undefined ? false : body.securityRemediation;
+  const securityMode =
+    typeof body.securityMode === "string" && ["skip", "scan", "remediate"].includes(body.securityMode)
+      ? body.securityMode
+      : (body.securityRemediation === true ? "remediate" : "scan");
 
   if (typeof includeContext !== "boolean") {
     return response(400, { error: "includeContext must be a boolean" });
   }
   if (typeof autoExecuteSimple !== "boolean") {
     return response(400, { error: "autoExecuteSimple must be a boolean" });
+  }
+  if (typeof securityRemediation !== "boolean") {
+    return response(400, { error: "securityRemediation must be a boolean" });
   }
 
   if (!bugText) return response(400, { error: "bugText is required" });
@@ -136,6 +147,8 @@ export const handler = async (
         triageInstruction,
         includeContext,
         autoExecuteSimple,
+        securityRemediation,
+        securityMode,
         mcpConfig,
         mcpEnabledServers,
         workflowVersion,
@@ -186,6 +199,8 @@ export const handler = async (
         triageInstruction,
         includeContext,
         autoExecuteSimple,
+        securityRemediation,
+        securityMode,
         ownerSub: user.sub,
         workflowVersion,
       }),

@@ -21,6 +21,7 @@ interface DecisionBody {
   mode?: unknown;
   artifact?: unknown;
   feedback?: unknown;
+  securityRemediation?: unknown;
 }
 
 function recommendedMode(run: Record<string, unknown>): ExecutionMode {
@@ -107,12 +108,14 @@ export const handler = async (
 
   const reviewer = callerIdentity(event);
   const approved = action === "execute";
+  const securityRemediation = body.securityRemediation === true;
   const approval = {
     action,
     approved,
     selectedMode: mode,
     selectedArtifact: artifact,
     feedback,
+    securityRemediation,
     reviewer: reviewer.email,
     reviewerSub: reviewer.sub,
     decidedAt: new Date().toISOString(),
