@@ -24,8 +24,13 @@ get a fully audited report with cost and resource usage.
 - **Context library** — private notes, PDFs, and images that inform triage
   (multimodal Bedrock analysis).
 - **Full cost & usage accounting** — analysis model tokens, Kiro credits (parsed
-  from Kiro's structured stream output), and in-container CPU / peak-memory
-  sampling via cgroup v2, per implementation attempt.
+  from Kiro's structured stream output), in-container CPU / peak-memory
+  sampling via cgroup v2, and Security Agent pentest task-hours ($50/hr), per run.
+- **AWS Security Agent integration** — optional code review + penetration test
+  (DAST) after validation via AWS Security Agent (Continuum). Three modes:
+  Skip, Scan only (async, fire-and-forget), or Scan & remediate (polls until
+  complete, collects findings). Pentest cost is calculated from actual task-hours
+  fetched from the Security Agent API.
 - **Read-only repository explorer** — before/after fix review with verification
   evidence, seeded-bug jump cards, guarded restore of the canonical buggy state,
   and guarded fix-branch deletion (`main` is structurally protected).
@@ -41,11 +46,11 @@ API Gateway (HTTP API, JWT authorizer) ── Lambdas: runs, decision, models,
         │                                  repository, context, mcp
         ▼
 Step Functions state machine
-  TRIAGE ─ DRAFT ─ (auto-)GATE ─ IMPLEMENT ─ VALIDATE ─┐
-     ▲                              │                  │ fail (≤3)
-     │                              ▼                  ▼
-  Bedrock (analysis models)   Bedrock AgentCore ── Kiro CLI (headless)
-                                    │                + user MCP servers
+  TRIAGE ─ DRAFT ─ (auto-)GATE ─ IMPLEMENT ─ VALIDATE ─ SECURITY ─┐
+     ▲                              │                    │        │ fail (≤3)
+     │                              ▼                    ▼        ▼
+  Bedrock (analysis models)   Bedrock AgentCore    AWS Security Agent
+                                    │              (code review + pentest)
                                     ▼
                               CodeCommit repo (fix/<run-id> branches)
 ```
@@ -142,7 +147,49 @@ The in-app 📖 **User guide** covers every screen and field in detail.
 Each run consumes Bedrock tokens (analysis), Kiro credits (implementation), and
 AgentCore compute — all reported per run in the UI. The idle stack costs are the
 usual serverless baseline (DynamoDB on-demand, S3, CloudFront, Secrets Manager).
+
+| Component | Typical cost | Notes |
+|-----------|-------------|-------|
+| Analysis (Haiku) | $0.01 – $0.05 | Triage + draft calls |
+| Analysis (Sonnet) | $0.05 – $0.30 | Triage + draft calls |
+| Kiro CLI | $0.50 – $3.00 | Per implementation attempt |
+| AgentCore runtime | Included | Container compute (preview) |
+| Code review | **Free** | Static analysis, 15–30 min |
+| Pentest | **$250 – $400** | $50/task-hour × 5–8 hours typical |
+
+Without security review, a typical run costs **under $5**. With pentest enabled,
+the security review dominates the cost.
+
 Delete the stack with `npx cdk destroy AdlcPocStack` when done.
+
+## Security Agent integration
+
+The pipeline optionally integrates **AWS Security Agent** (Continuum) for automated
+security scanning after validation passes. The start-run form offers three modes:
+
+| Mode | Behavior |
+|------|----------|
+| **Skip** | No security review; pipeline goes straight to report |
+| **Scan only** (default) | Kicks off code review + pentest asynchronously; run completes immediately |
+| **Scan & remediate** | Polls until both complete (up to 60 min); findings shown in run report |
+
+### What runs
+
+- **Code review** — static analysis (~15 tasks, 15–30 min). **Free.**
+- **Penetration test** — dynamic DAST scanning (~30–50 tasks, 20–40 min).
+  Billed at **$50 per task-hour**. Cost is calculated from actual `taskHours`
+  returned by the `ListPentestJobTasks` API after completion.
+
+### Security review card
+
+When a pentest completes, the run page shows a security card with findings by
+severity (Critical/High/Medium/Low) and a pass/fail verdict. The run passes
+security review only if there are zero Critical and zero High findings.
+
+### Cost tracking
+
+Pentest cost appears in the usage breakdown as a dedicated "Security review" card
+showing total task-hours, the $50/hr rate, and computed cost.
 
 ## Security notes
 
