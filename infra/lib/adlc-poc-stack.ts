@@ -276,7 +276,7 @@ export class AdlcPocStack extends cdk.Stack {
         resources: ["*"],
       }));
     }
-    securityStartFn.addEnvironment("SERVICE_ROLE_ARN", "arn:aws:iam::703091483751:role/service-role/security-testing-20260914113135");
+    securityStartFn.addEnvironment("SERVICE_ROLE_ARN", `arn:aws:iam::${this.account}:role/service-role/security-testing-20260914113135`);
     securityStartFn.addEnvironment("CONTEXT_BUCKET", contextBucket.bucketName);
     contextBucket.grantReadWrite(securityStartFn);
     repo.grantRead(securityStartFn);
